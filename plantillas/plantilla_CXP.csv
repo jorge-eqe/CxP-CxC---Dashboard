@@ -1,7 +1,0 @@
-Clearing Status;Days in Arrears;Year/Period;Company Code;Company Name;Supplier;Supplier Name;Recon. Account;Posting Date;Journal Entry Date;Journal Entry Type;Journal Entry;Clearing Journal Entry;Amount (CoCode Crcy);Effect. Exch. Rate;Amount (Tran Cur.);Debit/Credit;Tax Code;Reference;Item Text;Journal Entry Created By;Clearing Date
-Open;45;2025/001;MX01;Corporativo México SA de CV;P100001;Proveedor Ejemplo SA de CV;2100000;15.01.2025;15.01.2025;KR;5100099999;;-482300.00;1.0000;-482300.00;H;I1;REF001;Arrendamiento enero 2025;JGARCIA;
-Cleared;0;2025/002;MX01;Corporativo México SA de CV;P100002;Transportes del Norte SAB;2100000;01.02.2025;01.02.2025;KR;5100099991;5100099992;-127500.50;1.0000;-127500.50;H;I1;REF002;Flete febrero;JGARCIA;28.02.2025
-Open;16;2025/002;MX01;Corporativo México SA de CV;P100003;Suministros Altamira SC;2100000;10.02.2025;10.02.2025;KR;5100099985;;34200.00;1.0000;34200.00;S;I1;REF003;Reversa factura;MLOPEZ;
-Open;8;2025/002;MX02;Manufactura Norte SA de CV;P200001;Global Parts Inc;2100000;20.01.2025;20.01.2025;KR;5200010110;;-480200.00;17.15;-28000.00;H;EX;REF010;Piezas producción;RPEREZ;
-Open;94;2025/001;MX02;Manufactura Norte SA de CV;P200002;Machinery World Ltd;2100000;20.02.2025;20.02.2025;RE;5200010201;;-781200.00;18.60;-42000.00;H;EX;REF011;Maquinaria activo fijo;RPEREZ;
-Open;112;2025/001;US01;International Trading LLC;P300001;Amazon Business;2100000;10.01.2025;10.01.2025;KR;9100001055;;-22500.00;1.0000;-22500.00;H;EX;REF020;Office supplies;ADMIN;
