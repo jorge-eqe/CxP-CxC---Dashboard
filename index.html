@@ -715,76 +715,218 @@ function updateSourceBadge(){
 }
 
 // ── CSV / EXCEL PARSER ───────────────────────────────────────────────────────
-// Expected columns (flexible mapping):
-// Sociedad, Proveedor/Cliente, Documento, TipoDoc, FechaDoc, Vencimiento,
-// MonedaDoc, Importe, Pagado, CuentaGL, Aging(opt)
-const COL_MAP_AP = {
-  soc:     ['sociedad','bukrs','company code','soc'],
-  name:    ['proveedor','vendor','name','nombre'],
-  doc:     ['documento','document','belnr','no. doc','num doc'],
-  docType: ['tipo','tipo doc','blart','doc type'],
-  docDate: ['fecha doc','fecha documento','bldat','posting date'],
-  dueDate: ['vencimiento','zfbdt','due date','fecha vcto'],
-  docCur:  ['moneda','waers','currency','moneda doc'],
-  docAmount:['importe','amount','wrbtr','monto'],
-  paid:    ['pagado','paid','pago'],
-  glAcc:   ['cuenta gl','hkont','gl account','cuenta'],
-  aging:   ['aging','dias','días','age'],
-};
-const COL_MAP_AR = { ...COL_MAP_AP,
-  name: ['cliente','customer','name','nombre'],
+// ── SAP FIORI COLUMN MAPPING ─────────────────────────────────────────────────
+// Columnas exactas del export SAPUI5 (Manage Supplier/Customer Line Items)
+// + sinónimos de exports alternativos (FBL1N, FBL5N, ALV, etc.)
+const SAP_COLS = {
+  // ── Identificadores de sociedad
+  soc:          ['company code','bukrs','sociedad','soc','companycode'],
+  socName:      ['company name','nombre sociedad','company'],
+  // ── Proveedor / Cliente
+  supplierId:   ['supplier','kunnr','lifnr','vendor','cliente','proveedor id','bp'],
+  name:         ['supplier name','customer name','nombre','proveedor','cliente','vendor name','name1','name'],
+  searchTerm:   ['search term','suchbegriff','término búsqueda'],
+  // ── Documento contable
+  doc:          ['journal entry','belnr','documento','document','no. doc','journal entry number','asiento'],
+  docType:      ['journal entry type','blart','tipo doc','doc type','tipo'],
+  docDate:      ['posting date','bldat','fecha contab','fecha doc','posting'],
+  journalDate:  ['journal entry date','budat','fecha asiento'],
+  clearingDoc:  ['clearing journal entry','augbl','doc compensación','clearing doc'],
+  clearingDate: ['clearing date','augdt','fecha compensación'],
+  reference:    ['reference','xblnr','referencia','ref'],
+  itemText:     ['item text','sgtxt','texto partida','text'],
+  createdBy:    ['journal entry created by','usnam','creado por','created by'],
+  // ── Importes y moneda
+  docAmount:    ['amount (tran cur.)','wrbtr','amount (transaction currency)','importe transacción','monto','amount'],
+  lcAmount:     ['amount (cocode crcy)','dmbtr','amount (company code currency)','importe moneda sociedad','importe lc'],
+  docCur:       ['waers','currency','moneda','transaction currency','tran cur'],
+  exchRate:     ['effect. exch. rate','kursf','tipo cambio','exchange rate','exch rate'],
+  debitCredit:  ['debit/credit','shkzg','debe/haber','d/c','debit credit'],
+  // ── Aging y estado
+  aging:        ['days in arrears','daysinarrears','días atraso','dias atraso','aging','días','age'],
+  clearStatus:  ['clearing status','augst','estado compensación','status','estado'],
+  period:       ['year/period','gjahr','periodo','period','year'],
+  // ── Cuenta contable
+  glAcc:        ['recon. account','recon account','hkont','cuenta gl','gl account','reconciliation account','cuenta recon'],
+  taxCode:      ['tax code','mwskz','código impuesto','tax'],
 };
 
+// ── DETECCIÓN AUTOMÁTICA DE SEPARADOR ────────────────────────────────────────
+function detectSep(firstLine){
+  // SAP Fiori exporta con ; en muchas localidades, también tab o ,
+  const counts = { ';': 0, '\t': 0, ',': 0, '|': 0 };
+  for(const c of firstLine) if(c in counts) counts[c]++;
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+}
+
+// ── PARSER CSV ROBUSTO (maneja comillas, separadores mixtos, BOM) ─────────────
+function parseCSV(text){
+  // Quitar BOM si viene de SAP
+  text = text.replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if(lines.length < 2) return { headers:[], rows:[] };
+
+  const sep = detectSep(lines[0]);
+
+  // Parser que respeta campos entre comillas con separadores internos
+  function splitLine(line) {
+    const result = [];
+    let cur = '', inQ = false;
+    for(let i = 0; i < line.length; i++){
+      const ch = line[i];
+      if(ch === '"' && !inQ){ inQ = true; continue; }
+      if(ch === '"' && inQ){
+        if(line[i+1] === '"'){ cur += '"'; i++; } // comilla doble escapada
+        else inQ = false;
+        continue;
+      }
+      if(ch === sep && !inQ){ result.push(cur.trim()); cur = ''; continue; }
+      cur += ch;
+    }
+    result.push(cur.trim());
+    return result;
+  }
+
+  const headers = splitLine(lines[0]).map(h => h.replace(/^"|"$/g,'').trim());
+  const rows = lines.slice(1).map(line => {
+    const cells = splitLine(line);
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (cells[i] || '').trim());
+    return obj;
+  }).filter(r => Object.values(r).some(v => v));
+
+  return { headers, rows };
+}
+
+// ── MATCH DE COLUMNAS (insensible a mayúsculas, espacios y acentos) ───────────
+function normalizeStr(s){
+  return (s||'').toString().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
 function matchCol(headers, candidates){
-  const h = headers.map(x=>(x||'').toString().toLowerCase().trim());
+  const hn = headers.map(normalizeStr);
   for(const c of candidates){
-    const idx = h.findIndex(x=>x.includes(c)||c.includes(x));
-    if(idx>=0) return idx;
+    const cn = normalizeStr(c);
+    // Exacto primero
+    const exact = hn.findIndex(h => h === cn);
+    if(exact >= 0) return exact;
+    // Contiene
+    const partial = hn.findIndex(h => h.includes(cn) || cn.includes(h));
+    if(partial >= 0) return partial;
   }
   return -1;
 }
 
-function parseCSV(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim());
-  if(lines.length<2) return [];
-  const sep = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(sep).map(h=>h.replace(/^"|"$/g,'').trim());
-  return lines.slice(1).map(line=>{
-    const cells = line.split(sep).map(c=>c.replace(/^"|"$/g,'').trim());
-    const obj={};
-    headers.forEach((h,i)=>obj[h]=cells[i]||'');
-    return obj;
-  });
+// ── PARSE DE NÚMERO (maneja 1.234,56 y 1,234.56 y negativos SAP) ─────────────
+function parseNum(s){
+  if(!s || s === '-' || s === '') return 0;
+  s = s.toString().trim();
+  // SAP a veces muestra negativos como "1.234,56-" (signo al final)
+  const trailNeg = s.endsWith('-');
+  s = s.replace(/-$/,'');
+  // Detectar formato: si hay coma antes del punto → europeo (1.234,56)
+  const lastComma = s.lastIndexOf(',');
+  const lastDot   = s.lastIndexOf('.');
+  let num;
+  if(lastComma > lastDot){
+    // Formato europeo: 1.234,56
+    num = parseFloat(s.replace(/\./g,'').replace(',','.'));
+  } else {
+    // Formato americano: 1,234.56
+    num = parseFloat(s.replace(/,/g,''));
+  }
+  if(isNaN(num)) return 0;
+  return trailNeg ? -num : num;
 }
 
-function mapRows(rawRows, module, headers){
-  const map = module==='AP' ? COL_MAP_AP : COL_MAP_AR;
-  const idx={};
-  for(const[key,candidates] of Object.entries(map)){
-    idx[key]=matchCol(headers, candidates);
+// ── INFERIR TIPO DOCUMENTO DESDE DEBIT/CREDIT + MÓDULO ───────────────────────
+// SAP Fiori expone Debit/Credit (H=Haber=Credit, S=Soll=Debit)
+// AP natural: H (acreedor). AR natural: S (deudor)
+function inferDocType(row, colIdx, module){
+  const dc = (row[Object.keys(row)[colIdx['debitCredit']]] || '').trim().toUpperCase();
+  const jtype = (row[Object.keys(row)[colIdx['docType']]] || '').trim().toUpperCase();
+  if(jtype) return jtype; // Si viene explícito, usar ese
+  if(module === 'AP') return dc === 'H' ? 'KR' : 'KZ';
+  return dc === 'S' ? 'DR' : 'DG';
+}
+
+// ── INFERIR STATUS DESDE CLEARING STATUS ─────────────────────────────────────
+function inferStatus(clearStatus, aging, amtDoc, amtPaid){
+  const cs = (clearStatus || '').toLowerCase();
+  if(cs.includes('clear') || cs.includes('compens') || cs.includes('cleared')) return 'pagado';
+  if(amtPaid > 0 && amtPaid >= Math.abs(amtDoc)) return 'pagado';
+  if(amtPaid > 0) return 'parcial';
+  if(aging > 90) return 'vencido';
+  if(aging > 0) return 'pendiente';
+  return 'pendiente';
+}
+
+// ── MAPEAR FILAS AL MODELO INTERNO ───────────────────────────────────────────
+function mapRows(parsedRows, headers, module){
+  // Construir índice de columnas
+  const colIdx = {};
+  for(const [key, candidates] of Object.entries(SAP_COLS)){
+    colIdx[key] = matchCol(headers, candidates);
   }
-  const get=(row,key)=>{
-    if(idx[key]<0) return '';
-    return Object.values(row)[idx[key]]||'';
+
+  const getCell = (row, key) => {
+    const i = colIdx[key];
+    if(i < 0) return '';
+    const vals = Object.values(row);
+    return (vals[i] || '').toString().trim();
   };
-  return rawRows.map((row,i)=>{
-    const rawAmt = parseFloat((get(row,'docAmount')||'0').replace(/[$,\s]/g,''))||0;
-    const rawPaid= parseFloat((get(row,'paid')||'0').replace(/[$,\s]/g,''))||0;
-    const rawAging= parseInt(get(row,'aging'))||0;
-    const docType=(get(row,'docType')||'KR').toUpperCase();
-    const docCur=(get(row,'docCur')||'MXN').toUpperCase().replace(/[^A-Z]/g,'').slice(0,3)||'MXN';
-    const socCode=(get(row,'soc')||'MX01').toUpperCase().slice(0,4);
+
+  // Detectar moneda desde encabezado de columna de importe si el campo WAERS no está
+  let fallbackCur = 'MXN';
+  if(colIdx['docCur'] >= 0){
+    const curHeader = headers[colIdx['docCur']] || '';
+    const match = curHeader.match(/\b([A-Z]{3})\b/);
+    if(match) fallbackCur = match[1];
+  }
+
+  return parsedRows.map((row, i) => {
+    const rawAmt  = parseNum(getCell(row, 'docAmount'));
+    const rawLCAmt= parseNum(getCell(row, 'lcAmount'));
+    const rawAging= Math.abs(parseInt(getCell(row, 'aging')) || 0);
+    const clearSt = getCell(row, 'clearStatus');
+    const dc      = getCell(row, 'debitCredit').toUpperCase();
+
+    // Importe: usar LC si doc amount está vacío
+    const useAmt = rawAmt !== 0 ? rawAmt : rawLCAmt;
+    // Aplicar signo Debit/Credit de SAP
+    // AP: H (Haber) = negativo natural, S (Soll) = positivo (reversa)
+    // AR: S (Soll)  = positivo natural, H (Haber) = negativo (NC)
+    let finalAmt = useAmt;
+    if(dc === 'H' && module === 'AP') finalAmt = -Math.abs(useAmt);
+    if(dc === 'S' && module === 'AP') finalAmt =  Math.abs(useAmt); // reversa
+    if(dc === 'S' && module === 'AR') finalAmt =  Math.abs(useAmt);
+    if(dc === 'H' && module === 'AR') finalAmt = -Math.abs(useAmt); // NC
+
+    const docType = getCell(row, 'docType').toUpperCase() ||
+                    (module === 'AP' ? (dc==='H'?'KR':'KZ') : (dc==='S'?'DR':'DG'));
+    const docCur  = getCell(row, 'docCur').replace(/[^A-Z]/g,'').slice(0,3) || fallbackCur;
+    const socRaw  = getCell(row, 'soc') || 'MX01';
+    // Normalizar código sociedad: quitar espacios y tomar 4 chars
+    const socCode = socRaw.replace(/\s/g,'').toUpperCase().slice(0,4) || 'MX01';
+    const suppId  = getCell(row, 'supplierId');
+    const name    = getCell(row, 'name') || `${module==='AP'?'Proveedor':'Cliente'} ${i+1}`;
+    const glAcc   = getCell(row, 'glAcc') || '6100000';
+    const docNum  = getCell(row, 'doc') || `DOC${String(i+1).padStart(6,'0')}`;
+    const docDate = getCell(row, 'docDate') || getCell(row, 'journalDate') || '';
+    const dueDate = getCell(row, 'clearingDate') || '';
+    const paid    = clearSt.toLowerCase().includes('clear') ? Math.abs(finalAmt) : 0;
+    const status  = inferStatus(clearSt, rawAging, finalAmt, paid);
+
     return {
-      id: `F${String(i+1).padStart(3,'0')}`,
-      soc: socCode,
-      name: get(row,'name')||`Proveedor ${i+1}`,
-      doc: get(row,'doc')||`DOC${String(i+1).padStart(6,'0')}`,
-      docType, docDate: get(row,'docDate')||'', dueDate: get(row,'dueDate')||'',
-      docCur, docAmount: rawAmt, paid: rawPaid,
-      aging: rawAging, status: rawAging>90?'vencido':rawPaid>0&&rawPaid>=Math.abs(rawAmt)?'pagado':rawPaid>0?'parcial':'pendiente',
-      glAcc: get(row,'glAcc')||'6100000',
+      id: suppId || `F${String(i+1).padStart(3,'0')}`,
+      soc: socCode, name, doc: docNum, docType,
+      docDate, dueDate, docCur,
+      docAmount: finalAmt, paid: paid ? -Math.abs(finalAmt) : 0,
+      aging: rawAging, status, glAcc,
+      _raw: { dc, clearSt, ref: getCell(row,'reference'), text: getCell(row,'itemText') },
     };
-  }).filter(r=>r.name);
+  }).filter(r => r.name && r.doc);
 }
 
 function applyFileData(apRows, arRows, label){
@@ -863,14 +1005,15 @@ function buildUpload(){
         <span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto">FBL1N / BSIK export</span>
       </div>
       <div class="up-card-sub">
-        Exporta desde SAP usando la transacción <strong>FBL1N</strong> (partidas de proveedor) o desde el reporte <strong>BSIK/BSAK</strong>. 
-        Guarda como CSV con separador coma o Excel .xlsx y súbelo aquí.
+        Exporta desde SAP usando la app <strong>Manage Supplier Line Items</strong> (Fiori) 
+        o la transacción <strong>FBL1N → Exportar → CSV</strong>. El separador puede ser 
+        punto y coma, coma o tabulación — se detecta automáticamente.
       </div>
       <div class="drop-zone" id="dropAP" onclick="$('fileAP').click()" ondragover="dragOver(event,'dropAP')" ondragleave="dragLeave('dropAP')" ondrop="dropFile(event,'AP')">
         <div class="drop-icon">📂</div>
-        <div class="drop-lbl"><strong>Arrastra tu archivo aquí</strong><br>o haz clic para seleccionar<br><span style="font-size:10px">CSV · Excel (.xlsx) · máx. 10 MB</span></div>
+        <div class="drop-lbl"><strong>Arrastra tu archivo aquí</strong><br>o haz clic para seleccionar<br><span style="font-size:10px">CSV · TXT · separador auto-detectado · máx. 10 MB</span></div>
       </div>
-      <input type="file" class="drop-input" id="fileAP" accept=".csv,.xlsx,.xls" onchange="handleFile(this,'AP')"/>
+      <input type="file" class="drop-input" id="fileAP" accept=".csv,.txt" onchange="handleFile(this,'AP')"/>
       <div class="tpl-row">
         <button class="up-btn sec" onclick="downloadTemplate('AP')">⬇ Plantilla CSV</button>
         <button class="up-btn" id="btnLoadAP" onclick="loadAP()" disabled>Cargar CXP →</button>
@@ -886,14 +1029,14 @@ function buildUpload(){
         <span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto">FBL5N / BSID export</span>
       </div>
       <div class="up-card-sub">
-        Exporta desde SAP usando la transacción <strong>FBL5N</strong> (partidas de cliente) o desde el reporte <strong>BSID/BSAD</strong>. 
-        Guarda como CSV o Excel y súbelo aquí.
+        Exporta desde SAP usando la app <strong>Manage Customer Line Items</strong> (Fiori) 
+        o la transacción <strong>FBL5N → Exportar → CSV</strong>. Separador auto-detectado.
       </div>
       <div class="drop-zone" id="dropAR" onclick="$('fileAR').click()" ondragover="dragOver(event,'dropAR')" ondragleave="dragLeave('dropAR')" ondrop="dropFile(event,'AR')">
         <div class="drop-icon">📂</div>
-        <div class="drop-lbl"><strong>Arrastra tu archivo aquí</strong><br>o haz clic para seleccionar<br><span style="font-size:10px">CSV · Excel (.xlsx) · máx. 10 MB</span></div>
+        <div class="drop-lbl"><strong>Arrastra tu archivo aquí</strong><br>o haz clic para seleccionar<br><span style="font-size:10px">CSV · TXT · separador auto-detectado · máx. 10 MB</span></div>
       </div>
-      <input type="file" class="drop-input" id="fileAR" accept=".csv,.xlsx,.xls" onchange="handleFile(this,'AR')"/>
+      <input type="file" class="drop-input" id="fileAR" accept=".csv,.txt" onchange="handleFile(this,'AR')"/>
       <div class="tpl-row">
         <button class="up-btn sec" onclick="downloadTemplate('AR')">⬇ Plantilla CSV</button>
         <button class="up-btn" id="btnLoadAR" onclick="loadAR()" disabled>Cargar CXC →</button>
@@ -905,29 +1048,39 @@ function buildUpload(){
 
   <!-- Column mapping reference -->
   <div class="up-card" style="margin-bottom:22px">
-    <div style="font-size:13px;font-weight:600;margin-bottom:14px">Columnas esperadas en el archivo · mapeo automático</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
-      El sistema detecta las columnas automáticamente usando sinónimos comunes de SAP. 
-      Si tu exportación usa nombres distintos, la plantilla CSV ya tiene los encabezados correctos.
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px">Columnas reconocidas automáticamente</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+      El parser detecta el separador automáticamente (<strong>; , tab</strong>) y mapea los encabezados con o sin acentos.
+      Compatible con exports de <strong>SAP Fiori</strong> (Manage Supplier/Customer Line Items), <strong>FBL1N</strong>, <strong>FBL5N</strong> y ALV estándar.
     </div>
     <div class="field-map">
       ${[
-        ['Sociedad','BUKRS / Sociedad / Company Code'],
-        ['Proveedor / Cliente','NAME1 / Proveedor / Cliente'],
-        ['Documento','BELNR / No.Doc / Documento'],
-        ['Tipo Doc','BLART / Tipo / Doc Type'],
-        ['Fecha Doc','BLDAT / Fecha Doc'],
-        ['Vencimiento','ZFBDT / Vencimiento / Due Date'],
-        ['Moneda Doc','WAERS / Moneda / Currency'],
-        ['Importe','WRBTR / Importe / Amount'],
-        ['Pagado','Pagado / Paid'],
-        ['Cuenta GL','HKONT / Cuenta GL'],
+        ['Company Code',        'BUKRS · Sociedad · Soc'],
+        ['Supplier / Customer', 'NAME1 · Proveedor · Cliente · Vendor Name'],
+        ['Journal Entry',       'BELNR · Documento · Document'],
+        ['Journal Entry Type',  'BLART · Tipo Doc · Doc Type'],
+        ['Posting Date',        'BLDAT · Fecha Contab · Fecha Doc'],
+        ['Recon. Account',      'HKONT · Cuenta GL · GL Account'],
+        ['Amount (Tran Cur.)',  'WRBTR · Importe · Amount'],
+        ['Amount (CoCode Crcy)','DMBTR · Importe LC · Amount LC'],
+        ['Effect. Exch. Rate',  'KURSF · Tipo Cambio · Exchange Rate'],
+        ['Debit/Credit',        'SHKZG · D/C · Debe/Haber'],
+        ['Days in Arrears',     'Aging · Días Atraso · Days'],
+        ['Clearing Status',     'AUGST · Estado · Status'],
+        ['Clearing Date',       'AUGDT · Fecha Compensación'],
+        ['Reference',           'XBLNR · Referencia · Ref'],
+        ['Item Text',           'SGTXT · Texto Partida · Text'],
       ].map(([sap,cols])=>`
       <div class="field-row">
         <span class="field-sap">${sap}</span>
         <span class="field-arr">←</span>
         <span class="field-col">${cols}</span>
       </div>`).join('')}
+    </div>
+    <div style="margin-top:14px;padding:10px 14px;background:var(--surface2);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.7">
+      <strong style="color:var(--text)">Tip SAP Fiori:</strong> En la app "Manage Supplier Line Items" o "Supplier Line Items (Flexible)",
+      usa el botón <strong>Export → Spreadsheet</strong>. El archivo descargado es un CSV con separador de punto y coma (;) — el parser lo detecta automáticamente.
+      También puedes exportar desde <strong>FBL1N → Lista → Exportar → Valores locales de celda (CSV)</strong>.
     </div>
   </div>`;
 
@@ -946,40 +1099,55 @@ function buildUpload(){
     $('preview'+mod).innerHTML='';
     if(file.size>10*1024*1024){statusEl.className='up-status err';statusEl.textContent='Archivo demasiado grande (máx 10 MB)';return;}
     const ext=file.name.split('.').pop().toLowerCase();
-    if(!['csv','xlsx','xls'].includes(ext)){statusEl.className='up-status err';statusEl.textContent='Formato no soportado. Usa CSV o Excel.';return;}
+    if(!['csv','xlsx','xls','txt'].includes(ext)){statusEl.className='up-status err';statusEl.textContent='Formato no soportado. Usa CSV (.csv) o texto (.txt) exportado de SAP.';return;}
     const reader=new FileReader();
     reader.onload=e=>{
       try{
-        let rows,headers;
-        if(ext==='csv'){
-          const all=parseCSV(e.target.result);
-          headers=Object.keys(all[0]||{});
-          rows=all;
-        } else {
-          // For xlsx we show a helpful message since we don't have SheetJS loaded
-          statusEl.className='up-status warn';
-          statusEl.textContent='Excel detectado. Para mejor compatibilidad, guarda como CSV (UTF-8) desde SAP o Excel.';
-          // Still try to read as text (won't work for binary xlsx, but good UX)
-          rows=parseCSV(e.target.result);
-          headers=Object.keys(rows[0]||{});
+        const { headers, rows } = parseCSV(e.target.result);
+        if(!rows||rows.length===0){
+          statusEl.className='up-status err';
+          statusEl.textContent='No se encontraron datos. Verifica que el archivo tenga encabezados y al menos una fila.';
+          return;
         }
-        if(!rows||rows.length===0){statusEl.className='up-status err';statusEl.textContent='No se encontraron datos en el archivo.';return;}
-        const mapped=mapRows(rows,mod,headers);
+        // Detectar separador para mostrar diagnóstico
+        const firstLine = e.target.result.replace(/^\uFEFF/,'').split(/\r?\n/)[0];
+        const sep = detectSep(firstLine);
+        const sepName = sep===';'?'punto y coma (;)':sep==='\t'?'tabulación':sep===','?'coma (,)':'pipe (|)';
+
+        const mapped = mapRows(rows, headers, mod);
+        if(mapped.length===0){
+          statusEl.className='up-status err';
+          statusEl.textContent=`Columnas detectadas (${headers.length}) pero no se pudieron mapear filas. Verifica los encabezados.`;
+          $('preview'+mod).innerHTML=`<div class="up-preview"><div class="up-prev-hdr"><span>Columnas detectadas en tu archivo</span></div><div style="padding:12px;font-family:var(--mono);font-size:11px;color:var(--muted);line-height:2">${headers.map(h=>`<span style="background:var(--surface2);border:1px solid var(--border);padding:2px 7px;border-radius:3px;margin:2px;display:inline-block">${h}</span>`).join('')}</div></div>`;
+          return;
+        }
         if(mod==='AP'){window._apData=mapped;window._apHeaders=headers;$('btnLoadAP').disabled=false;}
         else{window._arData=mapped;window._arHeaders=headers;$('btnLoadAR').disabled=false;}
         statusEl.className='up-status ok';
-        statusEl.textContent=`✓ ${mapped.length} filas leídas · ${headers.length} columnas detectadas · "${file.name}"`;
-        renderPreview(mapped.slice(0,6),mod);
-      }catch(err){statusEl.className='up-status err';statusEl.textContent='Error al leer el archivo: '+err.message;}
+        statusEl.textContent=`✓ ${mapped.length} partidas leídas · ${headers.length} columnas · separador: ${sepName} · "${file.name}"`;
+        renderPreview(mapped.slice(0,6),mod,headers);
+      }catch(err){
+        statusEl.className='up-status err';
+        statusEl.textContent='Error al leer el archivo: '+err.message;
+        console.error(err);
+      }
     };
     reader.readAsText(file,'UTF-8');
   };
 
-  function renderPreview(rows,mod){
+  function renderPreview(rows, mod, headers){
     if(!rows||!rows.length)return;
-    const keys=['soc','name','doc','docType','docDate','dueDate','docCur','docAmount','paid','glAcc','aging'];
+    const keys=['soc','name','doc','docType','docDate','dueDate','docCur','docAmount','aging','status','glAcc'];
+    // Show detected SAP headers and preview
     $('preview'+mod).innerHTML=`<div class="up-preview">
-      <div class="up-prev-hdr"><span>Vista previa (primeras ${rows.length} filas)</span><span style="color:var(--muted)">${mod==='AP'?'CXP — Proveedores':'CXC — Clientes'}</span></div>
+      <div class="up-prev-hdr">
+        <span>Columnas detectadas en tu archivo (${headers.length})</span>
+        <span style="color:var(--green);font-family:var(--mono);font-size:10px">SAP Fiori / ALV</span>
+      </div>
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border);line-height:2.2">
+        ${headers.map(h=>`<span style="background:var(--surface2);border:1px solid var(--border2);padding:2px 7px;border-radius:3px;margin:2px;display:inline-block;font-family:var(--mono);font-size:10px;color:var(--text)">${h}</span>`).join('')}
+      </div>
+      <div class="up-prev-hdr" style="margin-top:0"><span>Vista previa · primeras ${rows.length} partidas mapeadas</span></div>
       <div class="up-prev-body"><table>
         <thead><tr>${keys.map(k=>`<th>${k}</th>`).join('')}</tr></thead>
         <tbody>${rows.map(r=>`<tr>${keys.map(k=>`<td>${r[k]??'—'}</td>`).join('')}</tr>`).join('')}</tbody>
