@@ -1,7 +1,7 @@
-Sociedad,Cliente,Documento,Tipo Doc,Fecha Doc,Vencimiento,Moneda,Importe,Pagado,Cuenta GL,Aging
-MX01,Mayoreo Altiplano SA de CV,1800045211,DR,2025-01-20,2025-02-19,MXN,934200.00,0.00,4100000,94
-MX01,Retail Noreste SA,1800045289,DR,2025-02-01,2025-03-03,MXN,250000.00,250000.00,4100000,0
-MX01,Comercializadora Zenith,1800045341,DR,2025-02-15,2025-03-17,MXN,178400.50,89200.25,4100000,11
-MX01,Distribuidora Novak MX,1800045488,DG,2025-02-22,2025-03-24,MXN,-45000.00,0.00,4100000,4
-MX02,Export Parts USA Inc,1900021010,DR,2025-01-20,2025-02-19,USD,55000.00,0.00,4100000,94
-US01,Midwest Distributors LLC,1500030110,DR,2025-01-10,2025-01-25,USD,87000.00,0.00,4100000,112
+Clearing Status;Days in Arrears;Year/Period;Company Code;Company Name;Supplier;Supplier Name;Recon. Account;Posting Date;Journal Entry Date;Journal Entry Type;Journal Entry;Clearing Journal Entry;Amount (CoCode Crcy);Effect. Exch. Rate;Amount (Tran Cur.);Debit/Credit;Tax Code;Reference;Item Text;Journal Entry Created By;Clearing Date
+Open;94;2025/001;MX01;Corporativo México SA de CV;C100001;Mayoreo Altiplano SA de CV;1200000;20.01.2025;20.01.2025;DR;1800045211;;934200.00;1.0000;934200.00;S;O1;FV001;Factura enero;LMENDEZ;
+Cleared;0;2025/002;MX01;Corporativo México SA de CV;C100002;Retail Noreste SA;1200000;01.02.2025;01.02.2025;DR;1800045289;1800045290;250000.00;1.0000;250000.00;S;O1;FV002;Factura febrero;LMENDEZ;28.02.2025
+Open;11;2025/002;MX01;Corporativo México SA de CV;C100003;Comercializadora Zenith;1200000;15.02.2025;15.02.2025;DR;1800045341;;178400.50;1.0000;178400.50;S;O1;FV003;Venta productos;LMENDEZ;
+Open;4;2025/002;MX01;Corporativo México SA de CV;C100004;Distribuidora Novak MX;1200000;22.02.2025;22.02.2025;DG;1800045488;;-45000.00;1.0000;-45000.00;H;O1;NC001;Nota crédito devolución;LMENDEZ;
+Open;94;2025/001;MX02;Manufactura Norte SA de CV;C200001;Export Parts USA Inc;1200000;20.01.2025;20.01.2025;DR;1900021010;;943250.00;17.15;55000.00;S;EX;FV010;Export invoice;RPEREZ;
+Open;112;2025/001;US01;International Trading LLC;C300001;Midwest Distributors LLC;1200000;10.01.2025;10.01.2025;DR;1500030110;;87000.00;1.0000;87000.00;S;EX;FV020;Distribution invoice;ADMIN;
