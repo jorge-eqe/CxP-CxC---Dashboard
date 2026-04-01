@@ -224,6 +224,7 @@ tbody td{padding:10px 12px;font-size:12px;vertical-align:middle}
   <div class="nav-section">
     <div class="nav-label">Módulos</div>
     <div class="nav-item active" onclick="setPage('cxp')"><span class="nav-dot"></span>CXP — Proveedores</div>
+    <div class="nav-item" onclick="setPage('proveedores')"><span class="nav-dot"></span>Por proveedor</div>
     <div class="nav-item" onclick="setPage('cxc')"><span class="nav-dot"></span>CXC — Clientes</div>
     <div class="nav-item" onclick="setPage('alertas')"><span class="nav-dot"></span>Alertas <span class="nbadge" id="alertBadge">9</span></div>
     <div class="nav-item" onclick="setPage('concil')"><span class="nav-dot"></span>Conciliación</div>
@@ -268,13 +269,16 @@ function registerSoc(code, name){
   SOCS[code]={code, name:name||code, cur:isUSD?'USD':'MXN', curLabel:isUSD?'Dólar americano':'Peso mexicano'};
 }
 const DT={
-  KR:{label:'KR',desc:'Factura proveedor',module:'AP',ns:-1},
-  KG:{label:'KG',desc:'Nota crédito prov.',module:'AP',ns:+1},
-  RE:{label:'RE',desc:'Factura de compras',module:'AP',ns:-1},
-  KZ:{label:'KZ',desc:'Pago proveedor',module:'AP',ns:0},
-  DR:{label:'DR',desc:'Factura cliente',module:'AR',ns:+1},
-  DG:{label:'DG',desc:'Nota crédito cliente',module:'AR',ns:-1},
-  DZ:{label:'DZ',desc:'Cobro cliente',module:'AR',ns:0},
+  KR:{label:'KR',desc:'Factura proveedor',      module:'AP',ns:-1},
+  KG:{label:'KG',desc:'Nota crédito prov.',     module:'AP',ns:+1},
+  RE:{label:'RE',desc:'Factura de compras',     module:'AP',ns:-1},
+  KZ:{label:'KZ',desc:'Pago proveedor',         module:'AP',ns:0},
+  ZP:{label:'ZP',desc:'Pago automático',        module:'AP',ns:0},
+  ZA:{label:'ZA',desc:'Pago ext./transferencia',module:'AP',ns:0},
+  SA:{label:'SA',desc:'Asiento manual GL',      module:'AP',ns:0},
+  DR:{label:'DR',desc:'Factura cliente',        module:'AR',ns:+1},
+  DG:{label:'DG',desc:'Nota crédito cliente',  module:'AR',ns:-1},
+  DZ:{label:'DZ',desc:'Cobro cliente',          module:'AR',ns:0},
 };
 const GLA={
   '5100000':{desc:'Costo de ventas'},'5200000':{desc:'Gastos de operación'},
@@ -753,7 +757,8 @@ const SAP_COLS = {
   // ── Importes y moneda
   docAmount:    ['amount (tran cur.)','wrbtr','amount (transaction currency)','importe transacción','monto','amount'],
   lcAmount:     ['amount (cocode crcy)','dmbtr','amount (company code currency)','importe moneda sociedad','importe lc'],
-  docCur:       ['waers','currency','moneda','transaction currency','tran cur'],
+  docCur:       ['transaction currency','waers','currency','moneda','tran cur','transaction cur'],
+  lcCur:        ['company code currency','hauswaehrung','moneda sociedad','cocode crcy','local currency'],
   exchRate:     ['effect. exch. rate','kursf','tipo cambio','exchange rate','exch rate'],
   debitCredit:  ['debit/credit','shkzg','debe/haber','d/c','debit credit'],
   // ── Aging y estado
@@ -867,12 +872,20 @@ function inferDocType(row, colIdx, module){
 
 // ── INFERIR STATUS DESDE CLEARING STATUS ─────────────────────────────────────
 function inferStatus(clearStatus, aging, amtDoc, amtPaid){
-  const cs = (clearStatus || '').toLowerCase();
-  if(cs.includes('clear') || cs.includes('compens') || cs.includes('cleared')) return 'pagado';
+  // SAP: Clearing Status '1' = compensado, '2' = abierto
+  const cs = (clearStatus || '').toString().trim();
+  if(cs === '1') return 'pagado';
+  if(cs === '2'){
+    if(aging > 90) return 'vencido';
+    if(aging > 0)  return 'pendiente';
+    return 'pendiente';
+  }
+  // Fallback texto
+  const csl = cs.toLowerCase();
+  if(csl.includes('clear') || csl.includes('compens')) return 'pagado';
   if(amtPaid > 0 && amtPaid >= Math.abs(amtDoc)) return 'pagado';
   if(amtPaid > 0) return 'parcial';
   if(aging > 90) return 'vencido';
-  if(aging > 0) return 'pendiente';
   return 'pendiente';
 }
 
@@ -919,24 +932,31 @@ function mapRows(parsedRows, headers, module){
 
     const docType = getCell(row, 'docType').toUpperCase() ||
                     (module === 'AP' ? (dc==='H'?'KR':'KZ') : (dc==='S'?'DR':'DG'));
-    const docCur  = getCell(row, 'docCur').replace(/[^A-Z]/g,'').slice(0,3) || fallbackCur;
+    const rawCurCell = getCell(row, 'docCur').replace(/[^A-Z]/g,'').slice(0,3);
+    const lcCurCell  = getCell(row, 'lcCur').replace(/[^A-Z]/g,'').slice(0,3);
+    const exchRateVal = parseNum(getCell(row, 'exchRate'));
     const socRaw  = getCell(row, 'soc');
+    
     // Normalizar: quitar espacios, uppercase, 4 chars. Si vacío, tomar el primer código conocido
     const socCode = socRaw ? socRaw.replace(/\s/g,'').toUpperCase().slice(0,4)
                            : Object.keys(SOCS)[0] || 'EXT';
+    const docCur = rawCurCell || lcCurCell
+      || inferCurrencyFromRate(rawLCAmt, rawAmt, exchRateVal, socCode);
+    const resolvedLcCur = lcCurCell || (SOCS[socCode]?.cur) || 'MXN';
     const suppId  = getCell(row, 'supplierId');
     const name    = getCell(row, 'name') || `${module==='AP'?'Proveedor':'Cliente'} ${i+1}`;
     const glAcc   = getCell(row, 'glAcc') || '6100000';
     const docNum  = getCell(row, 'doc') || `DOC${String(i+1).padStart(6,'0')}`;
     const docDate = getCell(row, 'docDate') || getCell(row, 'journalDate') || '';
     const dueDate = getCell(row, 'clearingDate') || '';
-    const paid    = clearSt.toLowerCase().includes('clear') ? Math.abs(finalAmt) : 0;
+    const isClear = clearSt.toString().trim() === '1';
+    const paid    = isClear ? Math.abs(finalAmt) : 0;
     const status  = inferStatus(clearSt, rawAging, finalAmt, paid);
 
     return {
       id: suppId || `F${String(i+1).padStart(3,'0')}`,
       soc: socCode, name, doc: docNum, docType,
-      docDate, dueDate, docCur,
+      docDate, dueDate, docCur, lcCur: resolvedLcCur,
       docAmount: finalAmt, paid: paid ? -Math.abs(finalAmt) : 0,
       aging: rawAging, status, glAcc,
       _socName: getCell(row, 'socName') || '',
@@ -1324,9 +1344,208 @@ function buildUpload(){
   };
 }
 
+
+function buildProveedores(){
+  const allV = fSoc(VEND);
+
+  // Agrupar por proveedor
+  const map = {};
+  allV.forEach(r => {
+    const key = r.id + '|' + r.name;
+    if(!map[key]) map[key] = {
+      id: r.id, name: r.name, soc: r.soc.code,
+      docs:[], totalFacturado:0, totalPagado:0, totalPendiente:0,
+      currencies: new Set(),
+    };
+    const g = map[key];
+    g.docs.push(r);
+    g.currencies.add(r.docCur);
+    // Solo facturas/NC, no pagos
+    if(['KR','RE','KG'].includes(r.docType)){
+      g.totalFacturado += Math.abs(r.lcAmt);
+      if(r.status === 'pagado') g.totalPagado += Math.abs(r.lcAmt);
+      else g.totalPendiente += saldo(r);
+    }
+  });
+
+  const provs = Object.values(map).sort((a,b) => b.totalPendiente - a.totalPendiente);
+
+  // Filtros de período
+  let selProv = null, selPeriod = 'all', dateFrom = '', dateTo = '';
+
+  const render = () => {
+    // Filtrar docs del proveedor seleccionado por período
+    const getFilteredDocs = (docs) => docs.filter(r => {
+      if(!dateFrom && !dateTo && selPeriod === 'all') return true;
+      const d = r.docDate ? new Date(r.docDate) : null;
+      if(!d) return selPeriod === 'all';
+      const now = new Date();
+      if(selPeriod === 'week'){
+        const w = new Date(now); w.setDate(now.getDate()-7);
+        return d >= w;
+      }
+      if(selPeriod === 'month'){
+        return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth();
+      }
+      if(selPeriod === 'quarter'){
+        const q = new Date(now); q.setMonth(now.getMonth()-3);
+        return d >= q;
+      }
+      if(selPeriod === 'year'){
+        return d.getFullYear() === now.getFullYear();
+      }
+      if(selPeriod === 'custom'){
+        const from = dateFrom ? new Date(dateFrom) : null;
+        const to   = dateTo   ? new Date(dateTo)   : null;
+        if(from && d < from) return false;
+        if(to   && d > to)   return false;
+        return true;
+      }
+      return true;
+    });
+
+    const sel = selProv ? map[selProv] : null;
+    const filteredDocs = sel ? getFilteredDocs(sel.docs) : [];
+
+    $('mainContent').innerHTML = `
+    <div class="sec-hdr" style="margin-bottom:20px">
+      <div><div class="sec-title">Control por proveedor</div>
+      <div class="sec-sub">Historial completo · pagado vs pendiente · selección de período</div></div>
+    </div>
+
+    <!-- KPIs globales -->
+    <div class="kpi-grid" style="margin-bottom:20px">
+      <div class="kpi-card" style="--kc:var(--accent)">
+        <div class="kpi-lbl">Proveedores activos</div>
+        <div class="kpi-val">${provs.length}</div>
+        <div class="kpi-sub">con partidas en el período</div>
+      </div>
+      <div class="kpi-card" style="--kc:var(--red)">
+        <div class="kpi-lbl">Total pendiente</div>
+        <div class="kpi-val" style="color:var(--red)"><span class="kpi-cur">LC</span>${fmt(provs.reduce((a,p)=>a+p.totalPendiente,0))}</div>
+        <div class="kpi-sub">${allV.filter(r=>r.status!=='pagado').length} partidas abiertas</div>
+      </div>
+      <div class="kpi-card" style="--kc:var(--green)">
+        <div class="kpi-lbl">Total pagado</div>
+        <div class="kpi-val" style="color:var(--green)"><span class="kpi-cur">LC</span>${fmt(provs.reduce((a,p)=>a+p.totalPagado,0))}</div>
+        <div class="kpi-sub">${allV.filter(r=>r.status==='pagado').length} partidas compensadas</div>
+      </div>
+      <div class="kpi-card" style="--kc:var(--teal)">
+        <div class="kpi-lbl">Total facturado</div>
+        <div class="kpi-val"><span class="kpi-cur">LC</span>${fmt(provs.reduce((a,p)=>a+p.totalFacturado,0))}</div>
+        <div class="kpi-sub">${allV.filter(r=>['KR','RE','KG'].includes(r.docType)).length} facturas</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:300px 1fr;gap:20px">
+      <!-- Lista de proveedores -->
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px">Proveedores</div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:520px;overflow-y:auto">
+          ${provs.map(p => {
+            const key = p.id+'|'+p.name;
+            const isActive = selProv === key;
+            return `<div onclick="window._selProv('${key.replace(/'/g,"\\'")}'); void 0"
+              style="padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer;
+                     background:${isActive?'rgba(59,130,246,.1)':'transparent'};
+                     border-left:3px solid ${isActive?'var(--accent)':'transparent'};
+                     transition:all .1s">
+              <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+              <div style="display:flex;justify-content:space-between;margin-top:4px">
+                <span style="font-family:var(--mono);font-size:10px;color:var(--red)">Pend: ${fmt(p.totalPendiente)}</span>
+                <span style="font-family:var(--mono);font-size:10px;color:var(--green)">Pag: ${fmt(p.totalPagado)}</span>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Detalle del proveedor seleccionado -->
+      <div>
+        ${!sel ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:40px;text-align:center;color:var(--muted);font-size:13px">
+          Selecciona un proveedor de la lista para ver su historial detallado
+        </div>` : `
+        <!-- Header del proveedor -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px">
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${sel.name}</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <span class="sb">${sel.id}</span>
+            <span class="sb">${sel.soc}</span>
+            ${[...sel.currencies].map(c=>curTag(c)).join('')}
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px">
+            <div style="background:var(--surface2);border-radius:6px;padding:10px">
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em">Facturado total</div>
+              <div style="font-family:var(--mono);font-size:16px;font-weight:600;margin-top:4px">${fmt(sel.totalFacturado)}</div>
+            </div>
+            <div style="background:var(--surface2);border-radius:6px;padding:10px">
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em">Pagado</div>
+              <div style="font-family:var(--mono);font-size:16px;font-weight:600;color:var(--green);margin-top:4px">${fmt(sel.totalPagado)}</div>
+            </div>
+            <div style="background:${sel.totalPendiente>0?'rgba(239,68,68,.05)':'var(--surface2)'};border-radius:6px;padding:10px;border:1px solid ${sel.totalPendiente>0?'rgba(239,68,68,.2)':'transparent'}">
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em">Pendiente</div>
+              <div style="font-family:var(--mono);font-size:16px;font-weight:600;color:${sel.totalPendiente>0?'var(--red)':'var(--green)'};margin-top:4px">${fmt(sel.totalPendiente)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filtros de período -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+          ${['all','week','month','quarter','year','custom'].map(p => `
+          <button onclick="window._selPeriod('${p}')"
+            style="padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-family:var(--sans);
+                   background:${selPeriod===p?'var(--accent)':'var(--surface2)'};
+                   color:${selPeriod===p?'#fff':'var(--text)'};
+                   border:1px solid ${selPeriod===p?'var(--accent)':'var(--border2)'};transition:all .15s">
+            ${{all:'Todo',week:'7 días',month:'Este mes',quarter:'Trimestre',year:'Este año',custom:'Personalizado'}[p]}
+          </button>`).join('')}
+          ${selPeriod==='custom'?`
+          <input type="date" class="fi" value="${dateFrom}" onchange="window._setFrom(this.value)" style="width:130px"/>
+          <span style="color:var(--muted);font-size:12px">→</span>
+          <input type="date" class="fi" value="${dateTo}" onchange="window._setTo(this.value)" style="width:130px"/>
+          `:''}
+          <span style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:auto">${filteredDocs.length} documentos</span>
+        </div>
+
+        <!-- Tabla de movimientos -->
+        <div class="tw"><table style="min-width:700px">
+          <thead><tr>
+            <th>Fecha</th><th>Tipo</th><th>Documento</th>
+            <th class="r">Importe doc.</th><th class="r">Importe LC</th>
+            <th>Moneda</th><th>Estado</th><th>Referencia</th>
+          </tr></thead>
+          <tbody>
+            ${filteredDocs.length===0?`<tr><td colspan="8" class="empty">Sin movimientos en el período seleccionado</td></tr>`:
+            filteredDocs.sort((a,b)=>new Date(b.docDate)-new Date(a.docDate)).map(r=>`
+            <tr>
+              <td style="font-family:var(--mono);font-size:11px">${r.docDate||'—'}</td>
+              <td>${dtEl(r.docType,r.alerts)}</td>
+              <td style="font-family:var(--mono);font-size:11px">${r.doc}</td>
+              <td class="tr" style="color:${r.docAmount<0?'var(--text)':'var(--red)'}">${fmt(r.docAmount)}</td>
+              <td class="tr">${fmt(r.lcAmt)}</td>
+              <td>${curTag(r.docCur)}</td>
+              <td>${stEl(r.status)}</td>
+              <td style="font-size:11px;color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r._raw?.ref||r._raw?.text||'—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>
+        `}
+      </div>
+    </div>`;
+
+    window._selProv = key => { selProv = key; render(); };
+    window._selPeriod = p => { selPeriod = p; render(); };
+    window._setFrom = v => { dateFrom = v; render(); };
+    window._setTo = v => { dateTo = v; render(); };
+  };
+  render();
+}
+  
+
+  
 function setPage(p){
   curPage=p;
-  const pages=['cxp','cxc','alertas','concil','gl','kpis','sociedades','upload'];
+  const pages=['cxp','cxc','alertas','concil','gl','kpis','sociedades','upload','proveedores'];
   document.querySelectorAll('.nav-item').forEach((el,i)=>el.classList.toggle('active',pages[i]===p));
   if(p==='cxp')buildAging('AP');
   if(p==='cxc')buildAging('AR');
@@ -1335,7 +1554,7 @@ function setPage(p){
   if(p==='gl')buildGL();
   if(p==='kpis')buildKPIs();
   if(p==='sociedades')buildSociedades();
-  if(p==='upload')buildUpload();
+  if(p==='proveedores')buildProveedores();
 }
 function setSociedad(v){
   curSoc=v;
