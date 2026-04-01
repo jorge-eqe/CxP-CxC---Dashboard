@@ -1170,8 +1170,8 @@ function buildUpload(){
 
   window.dragOver=(e,id)=>{e.preventDefault();$(id).classList.add('drag-over')};
   window.dragLeave=id=>{$(id).classList.remove('drag-over')};
-  window.dropFile=(e,mod)=>{e.preventDefault();dragLeave('drop'+mod);const f=e.dataTransfer.files[0];if(f)processFile(f,mod)};
-  window.handleFile=(inp,mod)=>{if(inp.files[0])processFile(inp.files[0],mod)};
+  window.dropFile=(e,mod)=>{e.preventDefault();window.dragLeave('drop'+mod);const f=e.dataTransfer.files[0];if(f)window.processFile(f,mod)};
+  window.handleFile=(inp,mod)=>{if(inp.files[0])window.processFile(inp.files[0],mod)};
 
   // Carga SheetJS bajo demanda (solo cuando se sube un xlsx)
   function loadSheetJS(cb){
@@ -1572,8 +1572,12 @@ function buildProveedores(){
   
 function setPage(p){
   curPage=p;
-  const pages=['cxp','cxc','alertas','concil','gl','kpis','sociedades','upload','proveedores'];
-  document.querySelectorAll('.nav-item').forEach((el,i)=>el.classList.toggle('active',pages[i]===p));
+  // Marcar el nav-item correcto basado en el onclick, no por índice
+  document.querySelectorAll('.nav-item').forEach((el)=>{
+    const pageMatch = el.getAttribute('onclick')?.match(/setPage\('([^']+)'\)/);
+    const itemPage = pageMatch ? pageMatch[1] : null;
+    el.classList.toggle('active', itemPage === p);
+  });
   if(p==='cxp')buildAging('AP');
   if(p==='cxc')buildAging('AR');
   if(p==='alertas')buildAlerts();
@@ -1582,6 +1586,7 @@ function setPage(p){
   if(p==='kpis')buildKPIs();
   if(p==='sociedades')buildSociedades();
   if(p==='proveedores')buildProveedores();
+  if(p==='upload')buildUpload();
 }
 function setSociedad(v){
   curSoc=v;
