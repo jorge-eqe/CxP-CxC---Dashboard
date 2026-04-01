@@ -199,8 +199,36 @@ tbody td{padding:10px 12px;font-size:12px;vertical-align:middle}
 .sync-opt-sub{font-size:11px;color:var(--muted);line-height:1.5}
 .sync-freq{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(59,130,246,.1);color:var(--accent);border:1px solid rgba(59,130,246,.2);margin-bottom:6px}
 </style>
-</head>
-<body>
+
+<!-- MÓDULOS MODULAR DE ARQUITECTURA (orden: importante) -->
+<!-- 0. AUTH · Sistema de autenticación (PRIMERO - crítico) -->
+<script src="js/auth.js"></script>
+
+<!-- 1. CORE · Gestor de datos y estado -->
+<!-- <script src="js/core.js"></script> -->
+
+<!-- 2. UTILS · Utilidades -->
+<!-- <script src="js/utils.js"></script> -->
+
+<!-- 3. UI · Sistema de renderizado -->
+<!-- <script src="js/ui.js"></script> -->
+
+<!-- 4. UPLOAD · Parser de archivos -->
+<!-- <script src="js/upload.js"></script> -->
+
+<!-- 5. EXPORT · Exportación a Excel -->
+<!-- <script src="js/export.js"></script> -->
+
+<!-- 6. PAGES · Módulos de páginas -->
+<!-- <script src="js/pages.js"></script> -->
+
+<!-- 7. HANDLERS · Eventos y manejadores -->
+<!-- <script src="js/handlers.js"></script> -->
+
+<!-- 8. MOCK DATA · Datos de demostración -->
+<!-- <script src="js/mockdata.js"></script> -->
+
+<head>
 <div class="shell">
 <header class="topbar">
   <div class="logo">CXP<span>/</span>CXC <span style="color:var(--muted);font-weight:300">Control</span></div>
@@ -1541,7 +1569,6 @@ function buildProveedores(){
   render();
 }
   
-
   
 function setPage(p){
   curPage=p;
@@ -1562,7 +1589,26 @@ function setSociedad(v){
   $('socFooter').textContent=lbl;
   setPage(curPage);
 }
-setPage('cxp');
+
+// ── INICIALIZACIÓN CON VERIFICACIÓN DE AUTENTICACIÓN ────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    // Cargar auth.js ANTES de cualquier otra cosa
+    // Verificar si usuario está autenticado
+    if (window.AuthManager && !window.AuthManager.checkSession()) {
+      // Mostrar login screen — reemplazar todo el contenido
+      document.body.innerHTML = window.AuthManager.renderLoginScreen();
+      console.log('Usuario no autenticado · mostrando login');
+      return;
+    }
+
+    // Usuario autenticado — proceder con inicialización normal
+    setPage('cxp');
+    console.log('Dashboard inicializado ✓ (autenticado)');
+  } catch (err) {
+    console.error('Error en inicialización:', err);
+  }
+});
 </script>
 </body>
 </html>
