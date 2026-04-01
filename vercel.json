@@ -1,0 +1,23 @@
+{
+  "name": "CXP-CXC Dashboard",
+  "version": 2,
+  "public": false,
+  "buildCommand": "echo 'No build needed'",
+  "outputDirectory": ".",
+  "routes": [
+    {
+      "src": "^/api/.*",
+      "dest": "api/$1",
+      "methods": ["GET", "POST", "OPTIONS"]
+    },
+    {
+      "src": "^(?!/api).*",
+      "dest": "index.html"
+    }
+  ],
+  "env": {
+    "DASHBOARD_PASSWORD": "@dashboard_password",
+    "DASHBOARD_USERS": "@dashboard_users",
+    "JWT_SECRET": "@jwt_secret"
+  }
+}

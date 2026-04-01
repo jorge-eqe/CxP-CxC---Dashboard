@@ -1596,22 +1596,30 @@ function setSociedad(v){
 }
 
 // ── INICIALIZACIÓN CON VERIFICACIÓN DE AUTENTICACIÓN ────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   try {
     // Cargar auth.js ANTES de cualquier otra cosa
-    // Verificar si usuario está autenticado
-    if (window.AuthManager && !window.AuthManager.checkSession()) {
-      // Mostrar login screen — reemplazar todo el contenido
-      document.body.innerHTML = window.AuthManager.renderLoginScreen();
-      console.log('Usuario no autenticado · mostrando login');
-      return;
+    // Verificar si usuario está autenticado (ahora async con backend JWT)
+    if (window.AuthManager) {
+      const isAuthenticated = await window.AuthManager.checkSession();
+      
+      if (!isAuthenticated) {
+        // Mostrar login screen — reemplazar todo el contenido
+        document.body.innerHTML = window.AuthManager.renderLoginScreen();
+        console.log('[INIT] Usuario no autenticado · mostrando login');
+        return;
+      }
     }
 
     // Usuario autenticado — proceder con inicialización normal
     setPage('cxp');
-    console.log('Dashboard inicializado ✓ (autenticado)');
+    console.log('[INIT] Dashboard inicializado ✓ (autenticado con JWT)');
   } catch (err) {
-    console.error('Error en inicialización:', err);
+    console.error('[INIT] Error en inicialización:', err);
+    // En caso de error, mostrar login por seguridad
+    if (window.AuthManager) {
+      document.body.innerHTML = window.AuthManager.renderLoginScreen();
+    }
   }
 });
 </script>

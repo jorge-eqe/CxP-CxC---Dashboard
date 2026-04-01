@@ -1,63 +1,99 @@
 /**
- * Sistema de Autenticación · Contraseña simple
+ * Sistema de Autenticación · Backend JWT
  * ─────────────────────────────────────────────
- * Protege acceso al dashboard con contraseña
- * IMPORTANTE: En producción, usar OAuth2/SSO SAP
+ * Auenticación segura con backend Vercel + JWT
+ * - Email + Password validados en backend
+ * - Whitelist de emails autorizados
+ * - JWT tokens con 8-horas de expiración
+ * - Roles: admin, viewer (control granular)
  */
 
 class AuthManager {
   constructor() {
-    // Contraseña hasheada (cambiar en producción)
-    // En teoría: hash('dashboard2025')
-    this.VALID_PASSWORD = 'dashboard2025';
-    this.SESSION_KEY = 'dashboard_auth_token';
-    this.SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 horas
+    this.SESSION_KEY = 'dashboard_jwt_token';
+    this.USER_KEY = 'dashboard_user_info';
+    this.API_BASE = window.location.hostname === 'localhost' 
+      ? 'http://localhost:3000' 
+      : ''; // En producción use ruta relativa /api/auth
     
     this.isAuthenticated = false;
+    this.currentUser = null;
   }
 
   // ─── CHECK DE SESIÓN AL CARGAR ────────────────────────────────
-  checkSession() {
+  async checkSession() {
     const token = window.sessionStorage.getItem(this.SESSION_KEY);
     if (!token) return false;
 
-    const { timestamp } = JSON.parse(token);
-    const now = Date.now();
+    try {
+      // Verificar token en backend
+      const response = await fetch(`${this.API_BASE}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
 
-    // Sesión expirada
-    if (now - timestamp > this.SESSION_DURATION) {
-      window.sessionStorage.removeItem(this.SESSION_KEY);
+      if (!response.ok) {
+        window.sessionStorage.removeItem(this.SESSION_KEY);
+        window.sessionStorage.removeItem(this.USER_KEY);
+        return false;
+      }
+
+      const data = await response.json();
+      this.isAuthenticated = true;
+      this.currentUser = data.user;
+      return true;
+    } catch (error) {
+      console.error('[AUTH] Error verificando sesión:', error);
       return false;
     }
-
-    // Sesión válida
-    this.isAuthenticated = true;
-    return true;
   }
 
-  // ─── LOGIN ────────────────────────────────────────────────────
-  login(password) {
-    if (password !== this.VALID_PASSWORD) {
-      return { success: false, error: 'Contraseña incorrecta' };
+  // ─── LOGIN (ASYNC - BACKEND) ──────────────────────────────────
+  async login(email, password) {
+    try {
+      const response = await fetch(`${this.API_BASE}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { 
+          success: false, 
+          error: data.error || 'Error en autenticación'
+        };
+      }
+
+      // Almacenar JWT y datos de usuario
+      window.sessionStorage.setItem(this.SESSION_KEY, data.token);
+      window.sessionStorage.setItem(this.USER_KEY, JSON.stringify(data.user));
+
+      this.isAuthenticated = true;
+      this.currentUser = data.user;
+
+      console.log(`[AUTH] Login exitoso: ${email} (${data.user.role})`);
+      return { success: true, user: data.user };
+    } catch (error) {
+      console.error('[AUTH] Error en login:', error);
+      return { 
+        success: false, 
+        error: 'Error de conexión con servidor'
+      };
     }
-
-    // Crear token de sesión
-    const token = {
-      timestamp: Date.now(),
-      user: 'dashboard_user',
-      permissions: ['view', 'download', 'filter'],
-    };
-
-    window.sessionStorage.setItem(this.SESSION_KEY, JSON.stringify(token));
-    this.isAuthenticated = true;
-
-    return { success: true, message: 'Autenticación exitosa' };
   }
 
   // ─── LOGOUT ───────────────────────────────────────────────────
   logout() {
+    const user = this.currentUser?.email || 'unknown';
+    console.log(`[AUTH] Logout: ${user}`);
+    
     window.sessionStorage.removeItem(this.SESSION_KEY);
+    window.sessionStorage.removeItem(this.USER_KEY);
     this.isAuthenticated = false;
+    this.currentUser = null;
     location.reload();
   }
 
@@ -121,10 +157,42 @@ class AuthManager {
             line-height:1.6;
           ">
             Este dashboard contiene información sensible.
-            <br>Ingresa tu contraseña para continuar.
+            <br>Autentica con tu email para continuar.
           </div>
 
-          <!-- Input -->
+          <!-- Email Input -->
+          <div style="margin-bottom:16px">
+            <label style="
+              display:block;
+              font-size:10px;
+              font-weight:600;
+              text-transform:uppercase;
+              color:var(--muted);
+              margin-bottom:6px;
+              letter-spacing:.07em;
+            ">
+              Email
+            </label>
+            <input
+              type="email"
+              id="authEmail"
+              placeholder="tu@email.com"
+              style="
+                width:100%;
+                background:var(--surface2);
+                border:1px solid var(--border2);
+                color:var(--text);
+                padding:10px 12px;
+                border-radius:6px;
+                font-family:var(--sans);
+                font-size:13px;
+                box-sizing:border-box;
+                outline:none;
+              "
+            />
+          </div>
+
+          <!-- Password Input -->
           <div style="margin-bottom:16px">
             <label style="
               display:block;
@@ -140,7 +208,7 @@ class AuthManager {
             <input
               type="password"
               id="authPassword"
-              placeholder="Ingresa contraseña..."
+              placeholder="Contraseña..."
               style="
                 width:100%;
                 background:var(--surface2);
@@ -169,6 +237,7 @@ class AuthManager {
 
           <!-- Botón -->
           <button
+            id="authSubmitBtn"
             onclick="window.AuthManager.submitLogin()"
             style="
               width:100%;
@@ -202,10 +271,11 @@ class AuthManager {
             color:var(--muted);
             line-height:1.6;
           ">
-            <strong style="color:var(--text)">⚠ Seguridad:</strong>
-            <br>Sesión protegida por 8 horas.
-            <br>Datos encriptados en tránsito.
-            <br>SAP: Conexión OData segura.
+            <strong style="color:var(--text)">🔐 Seguridad:</strong>
+            <br>✓ Autenticación JWT (backend)
+            <br>✓ Email whitelist (acceso controlado)
+            <br>✓ Sesión 8 horas (HTTPS)
+            <br>✓ Roles: Admin • Viewer
           </div>
         </div>
 
@@ -217,71 +287,91 @@ class AuthManager {
           color:var(--muted2);
           font-family:var(--mono);
         ">
-          Dashboard v2.0 · Información Confidencial
+          Dashboard v2.1 · Información Confidencial
         </div>
       </div>
     </div>
     `;
   }
 
-  // ─── SUBMIT LOGIN ─────────────────────────────────────────────
-  submitLogin() {
-    const input = document.getElementById('authPassword');
+  // ─── SUBMIT LOGIN (ASYNC) ─────────────────────────────────────
+  async submitLogin() {
+    const emailInput = document.getElementById('authEmail');
+    const passwordInput = document.getElementById('authPassword');
     const errorEl = document.getElementById('authError');
+    const submitBtn = document.getElementById('authSubmitBtn');
 
-    if (!input.value) {
-      errorEl.textContent = 'Ingresa tu contraseña';
+    // Validar inputs
+    if (!emailInput.value || !passwordInput.value) {
+      errorEl.textContent = 'Por favor ingresa email y contraseña';
       errorEl.style.color = 'var(--yellow)';
       return;
     }
 
-    const result = this.login(input.value);
+    // Deshabilitar botón
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Autenticando...';
+
+    // Llamar login async
+    const result = await this.login(emailInput.value, passwordInput.value);
 
     if (!result.success) {
       errorEl.textContent = result.error;
       errorEl.style.color = 'var(--red)';
-      input.value = '';
-      input.focus();
+      passwordInput.value = '';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Ingresar al Dashboard';
       return;
     }
 
     // Login exitoso
-    input.disabled = true;
-    errorEl.textContent = 'Cargando dashboard...';
+    errorEl.textContent = '✓ Autenticación exitosa. Cargando...';
     errorEl.style.color = 'var(--green)';
 
     // Recargar dashboard
     setTimeout(() => {
       location.reload();
-    }, 500);
+    }, 800);
   }
 
   // ─── RENDERIZAR BOTÓN LOGOUT ──────────────────────────────────
   renderLogoutButton() {
+    const email = this.currentUser?.email || 'Usuario';
+    const role = this.currentUser?.role === 'admin' ? '👤 Admin' : '👁️ Viewer';
+    
     return `
-    <button
-      onclick="window.AuthManager.logout()"
-      style="
-        background:rgba(239,68,68,.1);
-        border:1px solid rgba(239,68,68,.3);
-        color:var(--red);
-        padding:6px 12px;
-        border-radius:4px;
-        font-size:11px;
-        font-weight:500;
-        cursor:pointer;
-        font-family:var(--sans);
-        transition:all .2s;
-      "
-      onmouseover="
-        this.style.background='rgba(239,68,68,.2)';
-      "
-      onmouseout="
-        this.style.background='rgba(239,68,68,.1)';
-      "
-    >
-      🔓 Cerrar Sesión
-    </button>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <span style="
+        font-size:10px;
+        color:var(--muted);
+        font-family:var(--mono);
+      ">
+        ${role} • ${email}
+      </span>
+      <button
+        onclick="window.AuthManager.logout()"
+        style="
+          background:rgba(239,68,68,.1);
+          border:1px solid rgba(239,68,68,.3);
+          color:var(--red);
+          padding:6px 12px;
+          border-radius:4px;
+          font-size:11px;
+          font-weight:500;
+          cursor:pointer;
+          font-family:var(--sans);
+          transition:all .2s;
+        "
+        onmouseover="
+          this.style.background='rgba(239,68,68,.2)';
+        "
+        onmouseout="
+          this.style.background='rgba(239,68,68,.1)';
+        "
+      >
+        🔓 Cerrar
+      </button>
+    </div>
     `;
   }
 }

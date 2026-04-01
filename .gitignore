@@ -1,0 +1,33 @@
+# Variables de entorno (NUNCA versionar)
+.env
+.env.local
+.env.*.local
+
+# Node modules
+node_modules/
+package-lock.json
+
+# Dependencias
+/lib-cov
+*.seed
+*.log
+*.csv
+*.dat
+*.out
+*.pid
+*.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compilados
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
